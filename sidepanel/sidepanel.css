@@ -328,6 +328,12 @@ header {
   padding-inline: 10px;
 }
 
+#btn-paste-vps-url,
+#btn-copy-email,
+#btn-copy-password {
+  padding-inline: 10px;
+}
+
 .data-select {
   flex: 1;
   padding: 7px 10px;

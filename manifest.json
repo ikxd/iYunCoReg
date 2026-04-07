@@ -8,6 +8,8 @@
     "tabs",
     "webNavigation",
     "debugger",
+    "clipboardRead",
+    "clipboardWrite",
     "declarativeNetRequest",
     "webRequest",
     "storage",

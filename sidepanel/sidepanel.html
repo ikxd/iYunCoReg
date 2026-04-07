@@ -46,7 +46,10 @@
     <div class="data-card">
       <div class="data-row">
         <span class="data-label" data-i18n="labelCpaAuth">CPA Auth</span>
-        <input type="password" id="input-vps-url" class="data-input" placeholder="http://ip:port/management.html#/oauth" data-i18n-placeholder="placeholderCpaAuth" />
+        <div class="data-inline">
+          <input type="password" id="input-vps-url" class="data-input" placeholder="http://ip:port/management.html#/oauth" data-i18n-placeholder="placeholderCpaAuth" />
+          <button id="btn-paste-vps-url" class="btn btn-outline btn-sm" type="button" data-i18n="btnPaste">Paste</button>
+        </div>
       </div>
       <div class="data-row">
         <span class="data-label" data-i18n="labelLanguage">Language</span>
@@ -87,6 +90,7 @@
         <div class="data-inline">
           <input type="text" id="input-email" class="data-input" placeholder="Use Auto to generate an iCloud alias, or paste manually" />
           <button id="btn-fetch-email" class="btn btn-outline btn-sm" type="button" data-i18n="btnAuto">Auto</button>
+          <button id="btn-copy-email" class="btn btn-outline btn-sm" type="button" data-i18n="btnCopy">Copy</button>
         </div>
       </div>
       <div class="data-row">
@@ -94,6 +98,7 @@
         <div class="data-inline">
           <input type="password" id="input-password" class="data-input" placeholder="Leave blank to auto-generate" />
           <button id="btn-toggle-password" class="btn btn-outline btn-sm" type="button">Show</button>
+          <button id="btn-copy-password" class="btn btn-outline btn-sm" type="button" data-i18n="btnCopy">Copy</button>
         </div>
       </div>
       <div class="data-row">

@@ -28,7 +28,9 @@ const rowMailProvider = document.getElementById('row-mail-provider');
 const inputEmail = document.getElementById('input-email');
 const inputPassword = document.getElementById('input-password');
 const btnFetchEmail = document.getElementById('btn-fetch-email');
+const btnCopyEmail = document.getElementById('btn-copy-email');
 const btnTogglePassword = document.getElementById('btn-toggle-password');
+const btnCopyPassword = document.getElementById('btn-copy-password');
 const btnStop = document.getElementById('btn-stop');
 const btnReset = document.getElementById('btn-reset');
 const stepsProgress = document.getElementById('steps-progress');
@@ -38,6 +40,7 @@ const autoContinueBar = document.getElementById('auto-continue-bar');
 const btnClearLog = document.getElementById('btn-clear-log');
 const selectLanguage = document.getElementById('select-language');
 const inputVpsUrl = document.getElementById('input-vps-url');
+const btnPasteVpsUrl = document.getElementById('btn-paste-vps-url');
 const selectMailProvider = document.getElementById('select-mail-provider');
 const rowInbucketHost = document.getElementById('row-inbucket-host');
 const inputInbucketHost = document.getElementById('input-inbucket-host');
@@ -100,6 +103,8 @@ const I18N = {
     btnAuto: '自动',
     btnStop: '停止',
     btnContinue: '继续',
+    btnCopy: '复制',
+    btnPaste: '粘贴',
     btnRefresh: '刷新',
     btnDeleteUsed: '删除已用',
     btnIcloudLoginDone: '我已登录',
@@ -153,6 +158,14 @@ const I18N = {
     continueNeedEmail: '请先获取或粘贴邮箱地址',
     continueFailed: ({ message }) => `继续失败：${message}`,
     confirmReset: '要重置全部步骤和数据吗？',
+    copiedValue: ({ label }) => `已复制${label}`,
+    copiedValueFallback: ({ label }) => `已复制 ${label}`,
+    copyFailed: ({ label, message }) => `${label}复制失败：${message}`,
+    nothingToCopy: ({ label }) => `${label}为空，无法复制`,
+    pastedCpaAuth: '已从剪贴板粘贴 CPA Auth 地址',
+    pasteFailed: ({ message }) => `粘贴失败：${message}`,
+    clipboardEmpty: '剪贴板为空',
+    clipboardNoUsefulText: '剪贴板中没有可用内容',
     autoRunRunning: ({ runLabel }) => `运行中${runLabel}`,
     autoRunPaused: ({ runLabel }) => `已暂停${runLabel}`,
     autoRunInterrupted: ({ runLabel }) => `已中断${runLabel}`,
@@ -191,6 +204,8 @@ const I18N = {
     btnAuto: 'Auto',
     btnStop: 'Stop',
     btnContinue: 'Continue',
+    btnCopy: 'Copy',
+    btnPaste: 'Paste',
     btnRefresh: 'Refresh',
     btnDeleteUsed: 'Delete Used',
     btnIcloudLoginDone: "I've Signed In",
@@ -244,6 +259,14 @@ const I18N = {
     continueNeedEmail: 'Please fetch or paste an email address first!',
     continueFailed: ({ message }) => `Continue failed: ${message}`,
     confirmReset: 'Reset all steps and data?',
+    copiedValue: ({ label }) => `Copied ${label}`,
+    copiedValueFallback: ({ label }) => `${label} copied`,
+    copyFailed: ({ label, message }) => `Failed to copy ${label}: ${message}`,
+    nothingToCopy: ({ label }) => `${label} is empty`,
+    pastedCpaAuth: 'Pasted CPA Auth URL from clipboard',
+    pasteFailed: ({ message }) => `Paste failed: ${message}`,
+    clipboardEmpty: 'Clipboard is empty',
+    clipboardNoUsefulText: 'Clipboard does not contain usable text',
     autoRunRunning: ({ runLabel }) => `Running${runLabel}`,
     autoRunPaused: ({ runLabel }) => `Paused${runLabel}`,
     autoRunInterrupted: ({ runLabel }) => `Interrupted${runLabel}`,
@@ -260,6 +283,17 @@ function t(key, vars = {}) {
 
 function setAutoRunButton(label) {
   btnAutoRun.innerHTML = `${AUTO_BUTTON_ICON} ${label}`;
+}
+
+function getCopyLabel(kind) {
+  if (currentLanguage === 'zh-CN') {
+    if (kind === 'email') return '邮箱';
+    if (kind === 'password') return '密码';
+    return '内容';
+  }
+  if (kind === 'email') return 'email';
+  if (kind === 'password') return 'password';
+  return 'value';
 }
 
 function applyLanguage(language) {
@@ -301,6 +335,50 @@ function applyLanguage(language) {
   renderIcloudAliases(lastRenderedIcloudAliases);
   if (!icloudSummary.textContent || icloudSummary.textContent === 'Load your Hide My Email aliases to manage them here.') {
     icloudSummary.textContent = t('icloudSummaryInitial');
+  }
+}
+
+async function saveVpsUrlValue(value) {
+  const vpsUrl = String(value || '').trim();
+  inputVpsUrl.value = vpsUrl;
+  if (!vpsUrl) return;
+  await chrome.runtime.sendMessage({
+    type: 'SAVE_SETTING',
+    source: 'sidepanel',
+    payload: { vpsUrl },
+  });
+}
+
+async function copyTextValue(value, kind) {
+  const trimmed = String(value || '').trim();
+  const label = getCopyLabel(kind);
+  if (!trimmed) {
+    showToast(t('nothingToCopy', { label }), 'warn');
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(trimmed);
+    showToast(t('copiedValue', { label }), 'success', 2000);
+  } catch (err) {
+    showToast(t('copyFailed', { label, message: err.message || err }), 'error');
+  }
+}
+
+async function pasteCpaAuthFromClipboard(options = {}) {
+  const { silentIfFilled = false } = options;
+  if (silentIfFilled && inputVpsUrl.value.trim()) return;
+
+  try {
+    const text = String(await navigator.clipboard.readText() || '').trim();
+    if (!text) {
+      showToast(t('clipboardEmpty'), 'warn');
+      return;
+    }
+    await saveVpsUrlValue(text);
+    showToast(t('pastedCpaAuth'), 'success', 2000);
+  } catch (err) {
+    showToast(t('pasteFailed', { message: err.message || err }), 'warn');
   }
 }
 
@@ -775,6 +853,18 @@ btnFetchEmail.addEventListener('click', async () => {
   await refreshIcloudAliases({ silent: true });
 });
 
+btnCopyEmail.addEventListener('click', async () => {
+  await copyTextValue(inputEmail.value, 'email');
+});
+
+btnCopyPassword.addEventListener('click', async () => {
+  await copyTextValue(inputPassword.value, 'password');
+});
+
+btnPasteVpsUrl.addEventListener('click', async () => {
+  await pasteCpaAuthFromClipboard();
+});
+
 btnIcloudRefresh.addEventListener('click', async () => {
   await refreshIcloudAliases();
 });
@@ -886,6 +976,10 @@ inputVpsUrl.addEventListener('change', async () => {
   if (vpsUrl) {
     await chrome.runtime.sendMessage({ type: 'SAVE_SETTING', source: 'sidepanel', payload: { vpsUrl } });
   }
+});
+
+inputVpsUrl.addEventListener('click', async () => {
+  await pasteCpaAuthFromClipboard({ silentIfFilled: true });
 });
 
 inputPassword.addEventListener('change', async () => {
