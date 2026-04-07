@@ -270,6 +270,28 @@ header {
 
 .data-value.has-value { color: var(--text-primary); }
 
+.option-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.option-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--blue);
+  flex-shrink: 0;
+}
+
+.option-toggle span {
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
 .mono {
   font-family: 'JetBrains Mono', 'Consolas', monospace;
   font-size: 12px;
@@ -408,6 +430,35 @@ header {
   font-size: 12px;
   color: var(--text-secondary);
   margin-bottom: 8px;
+}
+
+.icloud-login-help {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--orange-soft);
+  border: 1px solid rgba(234, 88, 12, 0.22);
+}
+
+.icloud-login-help-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.icloud-login-help-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--orange);
+  margin-bottom: 3px;
+}
+
+.icloud-login-help-text {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
 }
 
 .icloud-list {

@@ -31,7 +31,9 @@ const DEFAULT_STATE = {
   autoRunCurrentRun: 0,
   autoRunTotalRuns: 1,
   autoRunPausedPhase: null,
+  language: 'zh-CN',
   oauthUrl: null,
+  autoDeleteUsedIcloudAlias: false,
   email: null,
   password: null,
   accounts: [], // Successfully completed accounts: { email, password, createdAt }
@@ -77,6 +79,13 @@ function broadcastDataUpdate(payload) {
   }).catch(() => {});
 }
 
+function broadcastIcloudAliasesChanged(payload = {}) {
+  chrome.runtime.sendMessage({
+    type: 'ICLOUD_ALIASES_CHANGED',
+    payload,
+  }).catch(() => {});
+}
+
 async function setEmailState(email) {
   await setState({ email });
   broadcastDataUpdate({ email });
@@ -112,6 +121,34 @@ async function recordCompletedAccount() {
   }
 
   await setState({ accounts });
+}
+
+async function maybeAutoDeleteCompletedIcloudAlias() {
+  const state = await getState();
+  if (!state.autoDeleteUsedIcloudAlias) return;
+
+  const email = String(state.email || '').trim();
+  if (!email) return;
+
+  try {
+    const aliases = await listIcloudAliases();
+    const alias = aliases.find(item => String(item?.email || '').trim() === email);
+
+    if (!alias) {
+      await addLog(`iCloud: Auto-delete skipped. ${email} was not found in your Hide My Email alias list.`, 'warn');
+      return;
+    }
+
+    if (!alias.anonymousId) {
+      await addLog(`iCloud: Auto-delete skipped. ${email} is missing anonymousId; refresh aliases and retry manually.`, 'warn');
+      return;
+    }
+
+    await deleteIcloudAlias(alias);
+    await addLog(`iCloud: Auto-deleted used alias ${email} after successful completion.`, 'ok');
+  } catch (err) {
+    await addLog(`iCloud: Auto-delete failed for ${email}: ${getErrorMessage(err)}`, 'warn');
+  }
 }
 
 async function setManualEmailState(email) {
@@ -179,7 +216,8 @@ async function promptIcloudLogin(error, actionLabel = 'iCloud action') {
     payload: {
       actionLabel,
       loginUrl: preferredUrl,
-      message: `iCloud session unavailable. Please sign in, then retry. ${originalError}`,
+      message: 'iCloud sign-in is required. A login page has been opened for you.',
+      detail: originalError,
     },
   }).catch(() => {});
 
@@ -202,11 +240,20 @@ async function withIcloudLoginHelp(actionLabel, action) {
     return await action();
   } catch (err) {
     if (isIcloudLoginRequiredError(err)) {
+      await addLog(`iCloud login check failed during ${actionLabel}: ${getErrorMessage(err)}`, 'warn');
       await promptIcloudLogin(err, actionLabel);
-      throw new Error(`iCloud login required. A login page was opened. Sign in first, then retry. Original error: ${getErrorMessage(err)}`);
+      throw new Error('Please finish signing in on the opened iCloud page, then click "I\'ve Signed In".');
     }
     throw err;
   }
+}
+
+async function checkIcloudSession() {
+  return withIcloudLoginHelp('checking iCloud session', async () => {
+    const { setupUrl } = await resolveIcloudPremiumMailService();
+    await addLog(`iCloud: Session check passed via ${new URL(setupUrl).host}`, 'ok');
+    return { ok: true, setupUrl };
+  });
 }
 
 async function icloudRequest(method, url, options = {}) {
@@ -334,7 +381,8 @@ async function listIcloudAliases() {
       .map(alias => normalizeIcloudAliasRecord(alias, usedEmails))
       .filter(Boolean)
       .sort((a, b) => {
-        if (a.used !== b.used) return a.used ? -1 : 1;
+        if (a.active !== b.active) return a.active ? -1 : 1;
+        if (a.used !== b.used) return a.used ? 1 : -1;
         return String(a.email).localeCompare(String(b.email));
       });
   });
@@ -384,6 +432,7 @@ async function deleteIcloudAlias(email) {
     }
 
     await addLog(`iCloud: Deleted alias ${alias.email}`, 'ok');
+    broadcastIcloudAliasesChanged({ reason: 'deleted', email: alias.email });
     return { email: alias.email };
   });
 }
@@ -419,6 +468,23 @@ async function fetchIcloudHideMyEmail() {
     const { serviceUrl, setupUrl } = await resolveIcloudPremiumMailService();
     await addLog(`iCloud: Session validated via ${new URL(setupUrl).host}`, 'ok');
 
+    const existingAliasesResponse = await icloudRequest('GET', `${serviceUrl}/v2/hme/list`);
+    const state = await getState();
+    const usedEmails = new Set((state.accounts || []).map(account => account.email).filter(Boolean));
+    const existingAliases = (findIcloudAliasArray(existingAliasesResponse) || [])
+      .map(alias => normalizeIcloudAliasRecord(alias, usedEmails))
+      .filter(Boolean);
+
+    const reusableAlias = existingAliases.find(alias => alias.active && !alias.used);
+    if (reusableAlias) {
+      await setEmailState(reusableAlias.email);
+      await addLog(`iCloud: Reusing unused alias ${reusableAlias.email}`, 'ok');
+      broadcastIcloudAliasesChanged({ reason: 'selected', email: reusableAlias.email });
+      return reusableAlias.email;
+    }
+
+    await addLog('iCloud: No unused active alias available, generating a new one...');
+
     const generated = await icloudRequest('POST', `${serviceUrl}/v1/hme/generate`);
     if (!generated?.success || !generated?.result?.hme) {
       throw new Error(generated?.error?.errorMessage || 'iCloud Hide My Email generate failed.');
@@ -440,6 +506,7 @@ async function fetchIcloudHideMyEmail() {
     const alias = reserved.result.hme.hme;
     await setEmailState(alias);
     await addLog(`iCloud: Reserved Hide My Email alias ${alias}`, 'ok');
+    broadcastIcloudAliasesChanged({ reason: 'created', email: alias });
     return alias;
   });
 }
@@ -457,7 +524,9 @@ async function resetState() {
     'seenInbucketMailIds',
     'accounts',
     'tabRegistry',
+    'language',
     'vpsUrl',
+    'autoDeleteUsedIcloudAlias',
     'customPassword',
     'mailProvider',
     'inbucketHost',
@@ -470,7 +539,9 @@ async function resetState() {
     seenInbucketMailIds: prev.seenInbucketMailIds || [],
     accounts: prev.accounts || [],
     tabRegistry: prev.tabRegistry || {},
+    language: prev.language || 'zh-CN',
     vpsUrl: prev.vpsUrl || '',
+    autoDeleteUsedIcloudAlias: Boolean(prev.autoDeleteUsedIcloudAlias),
     customPassword: prev.customPassword || '',
     mailProvider: prev.mailProvider || '163',
     inbucketHost: prev.inbucketHost || '',
@@ -1000,7 +1071,9 @@ async function handleMessage(message, sender) {
 
     case 'SAVE_SETTING': {
       const updates = {};
+      if (message.payload.language !== undefined) updates.language = message.payload.language;
       if (message.payload.vpsUrl !== undefined) updates.vpsUrl = message.payload.vpsUrl;
+      if (message.payload.autoDeleteUsedIcloudAlias !== undefined) updates.autoDeleteUsedIcloudAlias = Boolean(message.payload.autoDeleteUsedIcloudAlias);
       if (message.payload.customPassword !== undefined) updates.customPassword = message.payload.customPassword;
       if (message.payload.mailProvider !== undefined) updates.mailProvider = message.payload.mailProvider;
       if (message.payload.inbucketHost !== undefined) updates.inbucketHost = message.payload.inbucketHost;
@@ -1019,6 +1092,11 @@ async function handleMessage(message, sender) {
       clearStopRequest();
       const email = await fetchConfiguredEmail(message.payload || {});
       return { ok: true, email };
+    }
+
+    case 'CHECK_ICLOUD_SESSION': {
+      clearStopRequest();
+      return await checkIcloudSession();
     }
 
     case 'LIST_ICLOUD_ALIASES': {
@@ -1076,6 +1154,7 @@ async function handleStepData(step, payload) {
       break;
     case 9:
       await recordCompletedAccount();
+      await maybeAutoDeleteCompletedIcloudAlias();
       break;
   }
 }
