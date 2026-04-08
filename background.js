@@ -1286,12 +1286,6 @@ async function handleMessage(message, sender) {
       return { ok: true, email: message.payload.email };
     }
 
-    case 'FETCH_AUTO_EMAIL': {
-      clearStopRequest();
-      const email = await fetchConfiguredEmail(message.payload || {});
-      return { ok: true, email };
-    }
-
     case 'CHECK_ICLOUD_SESSION': {
       clearStopRequest();
       return await checkIcloudSession();
@@ -1600,32 +1594,20 @@ async function ensureAutoRunEmailReady(run, totalRuns) {
   const currentState = await getState();
   if (currentState.email) return;
 
-  let emailReady = false;
+  const pauseHint = 'Please select or paste an iCloud alias email, then continue';
+  await addLog(`=== Run ${run}/${totalRuns} PAUSED: ${pauseHint} ===`, 'warn');
+  autoRunPausedPhase = 'waiting_email';
+  await syncAutoRunState();
+  chrome.runtime.sendMessage(getAutoRunStatusMessage('waiting_email', run, totalRuns)).catch(() => {});
 
-  try {
-    const email = await fetchConfiguredEmail({ generateNew: true });
-    await addLog(`=== Run ${run}/${totalRuns} — iCloud Hide My Email ready: ${email} ===`, 'ok');
-    emailReady = true;
-  } catch (err) {
-    await addLog(`Auto email fetch failed: ${err.message}`, 'warn');
-  }
+  await waitForResume();
 
-  if (!emailReady) {
-    const pauseHint = 'Generate or paste an iCloud alias, then continue';
-    await addLog(`=== Run ${run}/${totalRuns} PAUSED: ${pauseHint} ===`, 'warn');
-    autoRunPausedPhase = 'waiting_email';
-    await syncAutoRunState();
-    chrome.runtime.sendMessage(getAutoRunStatusMessage('waiting_email', run, totalRuns)).catch(() => {});
+  autoRunPausedPhase = null;
+  await syncAutoRunState();
 
-    await waitForResume();
-
-    autoRunPausedPhase = null;
-    await syncAutoRunState();
-
-    const resumedState = await getState();
-    if (!resumedState.email) {
-      throw new Error('Cannot resume: no email address.');
-    }
+  const resumedState = await getState();
+  if (!resumedState.email) {
+    throw new Error('Cannot resume: no email address.');
   }
 }
 
@@ -1869,11 +1851,11 @@ async function executeStep3(state) {
     throw new Error('No email address. Paste email in Side Panel first.');
   }
 
-  const password = state.customPassword || generatePassword();
+  const password = state.customPassword || 'Aa1234567890';
   await setPasswordState(password);
 
   await addLog(
-    `Step 3: Filling email ${state.email}, password ${state.customPassword ? 'customized' : 'generated'} (${password.length} chars)`
+    `Step 3: Filling email ${state.email}, password ${state.customPassword ? 'customized' : 'default'} (${password.length} chars)`
   );
   await sendToContentScript('signup-page', {
     type: 'EXECUTE_STEP',

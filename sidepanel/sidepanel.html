@@ -47,7 +47,7 @@
       <div class="data-row">
         <span class="data-label" data-i18n="labelCpaAuth">CPA Auth</span>
         <div class="data-inline">
-          <input type="password" id="input-vps-url" class="data-input" placeholder="http://ip:port/management.html#/oauth" data-i18n-placeholder="placeholderCpaAuth" />
+          <input type="text" id="input-vps-url" class="data-input" placeholder="http://ip:port/management.html#/oauth" data-i18n-placeholder="placeholderCpaAuth" />
           <button id="btn-paste-vps-url" class="btn btn-outline btn-sm" type="button" data-i18n="btnPaste">Paste</button>
         </div>
       </div>
@@ -75,16 +75,7 @@
           <option value="163" data-i18n="mailProvider163">163 Mail (mail.163.com)</option>
           <option value="qq" data-i18n="mailProviderQq">QQ Mail (wx.mail.qq.com)</option>
           <option value="gmail" data-i18n="mailProviderGmail">Gmail (mail.google.com)</option>
-          <option value="inbucket" data-i18n="mailProviderInbucket">Inbucket (custom host)</option>
         </select>
-      </div>
-      <div class="data-row" id="row-inbucket-host" style="display:none;">
-        <span class="data-label" data-i18n="labelInbucket">Inbucket</span>
-        <input type="text" id="input-inbucket-host" class="data-input" placeholder="your-inbucket-host or https://your-inbucket-host" data-i18n-placeholder="placeholderInbucketHost" />
-      </div>
-      <div class="data-row" id="row-inbucket-mailbox" style="display:none;">
-        <span class="data-label" data-i18n="labelMailbox">Mailbox</span>
-        <input type="text" id="input-inbucket-mailbox" class="data-input" placeholder="e.g. zju2001" data-i18n-placeholder="placeholderInbucketMailbox" />
       </div>
       <div id="mail-login-help" class="icloud-login-help" style="display:none;">
         <div class="icloud-login-help-main">
@@ -96,8 +87,8 @@
       <div class="data-row">
         <span class="data-label" data-i18n="labelEmail">Email</span>
         <div class="data-inline">
-          <input type="text" id="input-email" class="data-input" placeholder="Use Auto to generate an iCloud alias, or paste manually" />
-          <button id="btn-fetch-email" class="btn btn-outline btn-sm" type="button" data-i18n="btnAuto">Auto</button>
+          <input type="text" id="input-email" class="data-input" placeholder="Please enter email manually" data-i18n-placeholder="placeholderEmailManual" />
+          <button id="btn-paste-email" class="btn btn-outline btn-sm" type="button" data-i18n="btnPaste">Paste</button>
           <button id="btn-copy-email" class="btn btn-outline btn-sm" type="button" data-i18n="btnCopy">Copy</button>
         </div>
       </div>
@@ -124,52 +115,8 @@
     </div>
     <div id="auto-continue-bar" class="auto-continue-bar" style="display:none;">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      <span id="auto-hint" class="auto-hint">Use Auto to generate an iCloud alias, or paste manually, then continue</span>
+      <span id="auto-hint" class="auto-hint">Please enter email manually, then continue</span>
       <button id="btn-auto-continue" class="btn btn-primary btn-sm" data-i18n="btnContinue">Continue</button>
-    </div>
-  </section>
-
-  <section id="icloud-section">
-    <div class="log-header">
-      <span class="section-label" data-i18n="sectionIcloud">iCloud</span>
-      <div class="icloud-actions">
-        <button id="btn-icloud-refresh" class="btn btn-ghost btn-xs" type="button" data-i18n="btnRefresh">Refresh</button>
-        <button id="btn-icloud-delete-used" class="btn btn-outline btn-xs" type="button" data-i18n="btnDeleteUsed">Delete Used</button>
-      </div>
-    </div>
-    <div class="icloud-card">
-      <div id="icloud-summary" class="icloud-summary">Load your Hide My Email aliases to manage them here.</div>
-      <div id="icloud-login-help" class="icloud-login-help" style="display:none;">
-        <div class="icloud-login-help-main">
-          <div id="icloud-login-help-title" class="icloud-login-help-title">iCloud sign-in required</div>
-          <div id="icloud-login-help-text" class="icloud-login-help-text">A new iCloud page has been opened. Complete sign-in there, then come back here.</div>
-        </div>
-        <button id="btn-icloud-login-done" class="btn btn-primary btn-xs" type="button" data-i18n="btnIcloudLoginDone">I've Signed In</button>
-      </div>
-      <div class="icloud-toolbar">
-        <input id="input-icloud-search" class="data-input icloud-search" type="text" placeholder="Search alias / label / note" data-i18n-placeholder="placeholderIcloudSearch" />
-        <select id="select-icloud-filter" class="data-select icloud-filter">
-          <option value="all" data-i18n="icloudFilterAll">All</option>
-          <option value="active" data-i18n="icloudFilterActive">Active</option>
-          <option value="used" data-i18n="icloudFilterUsed">Used</option>
-          <option value="unused" data-i18n="icloudFilterUnused">Unused</option>
-          <option value="preserved" data-i18n="icloudFilterPreserved">Preserved</option>
-        </select>
-      </div>
-      <div class="icloud-bulkbar">
-        <label class="option-toggle icloud-select-all" for="checkbox-icloud-select-all">
-          <input type="checkbox" id="checkbox-icloud-select-all" />
-          <span id="icloud-selection-summary">0 selected</span>
-        </label>
-        <div class="icloud-bulk-actions">
-          <button id="btn-icloud-bulk-used" class="btn btn-outline btn-xs" type="button" data-i18n="btnMarkUsed">Mark Used</button>
-          <button id="btn-icloud-bulk-unused" class="btn btn-outline btn-xs" type="button" data-i18n="btnMarkUnused">Mark Unused</button>
-          <button id="btn-icloud-bulk-preserve" class="btn btn-outline btn-xs" type="button" data-i18n="btnPreserve">Preserve</button>
-          <button id="btn-icloud-bulk-unpreserve" class="btn btn-outline btn-xs" type="button" data-i18n="btnUnpreserve">Unpreserve</button>
-          <button id="btn-icloud-bulk-delete" class="btn btn-outline btn-xs" type="button" data-i18n="btnDelete">Delete</button>
-        </div>
-      </div>
-      <div id="icloud-list" class="icloud-list"></div>
     </div>
   </section>
 
