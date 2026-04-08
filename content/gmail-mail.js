@@ -1,0 +1,290 @@
+// content/gmail-mail.js — Content script for Gmail (steps 4, 7)
+// Injected on: mail.google.com
+//
+// Strategy:
+// 1. Snapshot currently visible conversation IDs
+// 2. Refresh the inbox and prioritize new matching threads
+// 3. After a few attempts, fall back to the first matching visible row
+
+const GMAIL_PREFIX = '[MultiPage:gmail-mail]';
+const isTopFrame = window === window.top;
+
+console.log(GMAIL_PREFIX, 'Content script loaded on', location.href, 'frame:', isTopFrame ? 'top' : 'child');
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'POLL_EMAIL') {
+    if (!isTopFrame) {
+      sendResponse({ ok: false, reason: 'wrong-frame' });
+      return;
+    }
+
+    resetStopState();
+    handlePollEmail(message.step, message.payload).then(result => {
+      sendResponse(result);
+    }).catch(err => {
+      if (isStopError(err)) {
+        log(`Step ${message.step}: Stopped by user.`, 'warn');
+        sendResponse({ stopped: true, error: err.message });
+        return;
+      }
+      log(`Step ${message.step}: Poll attempt failed, background will decide whether to resend/retry: ${err.message}`, 'warn');
+      sendResponse({ error: err.message });
+    });
+    return true;
+  }
+});
+
+function isVisible(element) {
+  if (!element) return false;
+  const style = window.getComputedStyle(element);
+  if (style.display === 'none' || style.visibility === 'hidden') return false;
+  return element.getClientRects().length > 0;
+}
+
+function getVisibleMailRows() {
+  return Array.from(document.querySelectorAll('tr.zA')).filter(isVisible);
+}
+
+function getMailIdFromRow(row) {
+  const threadNode = row.querySelector('.bqe[data-thread-id], .bqe[data-legacy-thread-id], [data-thread-id], [data-legacy-thread-id]');
+  return (
+    threadNode?.getAttribute('data-thread-id')
+    || threadNode?.getAttribute('data-legacy-thread-id')
+    || row.getAttribute('data-thread-id')
+    || row.getAttribute('data-legacy-thread-id')
+    || row.id
+    || ''
+  ).trim();
+}
+
+function getCurrentMailIds() {
+  const ids = new Set();
+  for (const row of getVisibleMailRows()) {
+    const id = getMailIdFromRow(row);
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+function getRowText(row, selector) {
+  return (row.querySelector(selector)?.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function extractMailMeta(row) {
+  const sender = getRowText(row, '.yW .zF, .yW .yP, .zF, .yP');
+  const subject = getRowText(row, '.bog .bqe, .y6 .bqe, .bqe');
+  const digest = getRowText(row, '.y2');
+  const ariaLabelId = row.getAttribute('aria-labelledby');
+  const ariaLabel = ariaLabelId
+    ? (document.getElementById(ariaLabelId)?.textContent || '').replace(/\s+/g, ' ').trim()
+    : '';
+
+  return {
+    sender,
+    subject,
+    digest,
+    ariaLabel,
+    unread: row.classList.contains('zE'),
+  };
+}
+
+function triggerRowHover(row) {
+  row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+  row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+  row.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+}
+
+function findVisibleRowDeleteButton(row) {
+  const buttons = row.querySelectorAll('li.bru[data-tooltip], li.bru');
+  for (const button of buttons) {
+    if (isVisible(button)) return button;
+  }
+  return null;
+}
+
+function findTopToolbarDeleteButton() {
+  const candidates = document.querySelectorAll([
+    'div[role="button"][aria-label="删除"]',
+    'div[role="button"][data-tooltip="删除"]',
+    'div[role="button"][aria-label="Delete"]',
+    'div[role="button"][data-tooltip="Delete"]',
+    '.T-I.nX[role="button"]',
+  ].join(', '));
+
+  for (const button of candidates) {
+    if (isVisible(button) && button.getAttribute('aria-disabled') !== 'true') {
+      return button;
+    }
+  }
+  return null;
+}
+
+async function ensureMailSelected(row) {
+  const checkbox = row.querySelector('.oZ-jc[role="checkbox"]');
+  if (!checkbox) {
+    throw new Error('Could not find Gmail row checkbox.');
+  }
+
+  if (checkbox.getAttribute('aria-checked') === 'true') return;
+
+  simulateClick(checkbox);
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 5000) {
+    throwIfStopped();
+    if (checkbox.getAttribute('aria-checked') === 'true') return;
+    await sleep(100);
+  }
+
+  throw new Error('Timed out while selecting Gmail row for deletion.');
+}
+
+async function deleteGmailItem(row, mailId) {
+  triggerRowHover(row);
+  await sleep(250);
+
+  const rowDeleteButton = findVisibleRowDeleteButton(row);
+  if (rowDeleteButton) {
+    simulateClick(rowDeleteButton);
+    log(`Gmail: Row delete clicked for ${mailId}`);
+  } else {
+    await ensureMailSelected(row);
+    await sleep(250);
+
+    const toolbarDelete = findTopToolbarDeleteButton();
+    if (!toolbarDelete) {
+      throw new Error('Could not find Gmail delete button.');
+    }
+
+    simulateClick(toolbarDelete);
+    log(`Gmail: Toolbar delete clicked for ${mailId}`);
+  }
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 8000) {
+    throwIfStopped();
+    const stillExists = getVisibleMailRows().some(currentRow => getMailIdFromRow(currentRow) === mailId);
+    if (!stillExists) return;
+    await sleep(150);
+  }
+
+  throw new Error(`Gmail row ${mailId} did not disappear after delete.`);
+}
+
+function findRefreshButton() {
+  const candidates = document.querySelectorAll([
+    'div[role="button"][aria-label="刷新"]',
+    'div[role="button"][data-tooltip="刷新"]',
+    'div[role="button"][aria-label="Refresh"]',
+    'div[role="button"][data-tooltip="Refresh"]',
+    '.T-I.nu[role="button"]',
+  ].join(', '));
+
+  for (const button of candidates) {
+    if (isVisible(button) && button.getAttribute('aria-disabled') !== 'true') {
+      return button;
+    }
+  }
+  return null;
+}
+
+async function refreshInbox() {
+  const refreshButton = findRefreshButton();
+  if (!refreshButton) {
+    throw new Error('Could not find Gmail refresh button.');
+  }
+
+  simulateClick(refreshButton);
+  log('Gmail: Refresh clicked');
+  await sleep(1500);
+}
+
+function extractVerificationCode(text) {
+  const matchCn = text.match(/(?:代码为|验证码[^0-9]*?)[\s：:]*(\d{6})/);
+  if (matchCn) return matchCn[1];
+
+  const matchEn = text.match(/code[:\s]+is[:\s]+(\d{6})|code[:\s]+(\d{6})/i);
+  if (matchEn) return matchEn[1] || matchEn[2];
+
+  const match6 = text.match(/\b(\d{6})\b/);
+  if (match6) return match6[1];
+
+  return null;
+}
+
+function rowMatchesFilters(meta, senderFilters, subjectFilters) {
+  const senderText = `${meta.sender} ${meta.ariaLabel}`.toLowerCase();
+  const subjectText = `${meta.subject} ${meta.digest} ${meta.ariaLabel}`.toLowerCase();
+  const senderMatch = senderFilters.some(filter => senderText.includes(String(filter || '').toLowerCase()));
+  const subjectMatch = subjectFilters.some(filter => subjectText.includes(String(filter || '').toLowerCase()));
+  return senderMatch || subjectMatch;
+}
+
+async function handlePollEmail(step, payload) {
+  const { senderFilters, subjectFilters, maxAttempts, intervalMs } = payload;
+
+  log(`Step ${step}: Starting email poll on Gmail (max ${maxAttempts} attempts, every ${intervalMs / 1000}s)`);
+
+  try {
+    await waitForElement('table.F.cf.zt, tr.zA', 15000);
+    log(`Step ${step}: Gmail list loaded`);
+  } catch {
+    throw new Error('Gmail list did not load. Make sure Gmail inbox or Primary tab is open.');
+  }
+
+  const existingMailIds = getCurrentMailIds();
+  log(`Step ${step}: Snapshotted ${existingMailIds.size} visible emails as "old"`);
+
+  const FALLBACK_AFTER = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    log(`Polling Gmail... attempt ${attempt}/${maxAttempts}`);
+
+    if (attempt > 1) {
+      await refreshInbox();
+    }
+
+    const useFallback = attempt > FALLBACK_AFTER;
+    const rows = getVisibleMailRows();
+    const orderedRows = [
+      ...rows.filter(row => row.classList.contains('zE')),
+      ...rows.filter(row => !row.classList.contains('zE')),
+    ];
+
+    for (const row of orderedRows) {
+      const mailId = getMailIdFromRow(row);
+      if (!mailId) continue;
+      if (!useFallback && existingMailIds.has(mailId)) continue;
+
+      const meta = extractMailMeta(row);
+      if (!rowMatchesFilters(meta, senderFilters, subjectFilters)) continue;
+
+      const code = extractVerificationCode(`${meta.subject} ${meta.digest} ${meta.ariaLabel}`);
+      if (!code) continue;
+
+      const source = useFallback && existingMailIds.has(mailId) ? 'fallback-first-match' : 'new';
+      try {
+        await deleteGmailItem(row, mailId);
+        log(`Step ${step}: Deleted Gmail item ${mailId} after extracting code`, 'ok');
+      } catch (deleteErr) {
+        log(`Step ${step}: Gmail delete failed for ${mailId}: ${deleteErr.message}`, 'warn');
+      }
+
+      log(`Step ${step}: Code found: ${code} (${source}, subject: ${meta.subject.slice(0, 60)})`, 'ok');
+      return { ok: true, code, emailTimestamp: Date.now(), mailId };
+    }
+
+    if (attempt === FALLBACK_AFTER + 1) {
+      log(`Step ${step}: No new Gmail emails after ${FALLBACK_AFTER} attempts, falling back to first matching email`, 'warn');
+    }
+
+    if (attempt < maxAttempts) {
+      await sleep(intervalMs);
+    }
+  }
+
+  throw new Error(
+    `No new matching email found on Gmail after ${(maxAttempts * intervalMs / 1000).toFixed(0)}s. ` +
+    'Check Gmail manually and make sure the inbox or Primary tab is visible.'
+  );
+}

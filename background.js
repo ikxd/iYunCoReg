@@ -48,7 +48,7 @@ const DEFAULT_STATE = {
   logs: [],
   vpsUrl: '',
   customPassword: '',
-  mailProvider: '163', // 'qq', '163', or 'inbucket'
+  mailProvider: '163', // 'qq', '163', 'gmail', or 'inbucket'
   inbucketHost: '',
   inbucketMailbox: '',
 };
@@ -1904,6 +1904,9 @@ function getMailConfig(state) {
   const provider = state.mailProvider || 'qq';
   if (provider === '163') {
     return { source: 'mail-163', url: 'https://mail.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 Mail' };
+  }
+  if (provider === 'gmail') {
+    return { source: 'gmail-mail', url: 'https://mail.google.com/mail/u/0/#inbox', label: 'Gmail' };
   }
   if (provider === 'inbucket') {
     const host = normalizeInbucketOrigin(state.inbucketHost);
