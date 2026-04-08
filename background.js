@@ -862,6 +862,26 @@ async function sendToContentScript(source, message) {
   return chrome.tabs.sendMessage(entry.tabId, message);
 }
 
+async function sendToTabWithRetry(tabId, message, options = {}) {
+  const timeoutMs = options.timeoutMs ?? 10000;
+  const intervalMs = options.intervalMs ?? 300;
+  const startedAt = Date.now();
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    throwIfStopped();
+
+    try {
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (err) {
+      lastError = err;
+      await sleepWithStop(intervalMs);
+    }
+  }
+
+  throw new Error(`Tab ${tabId} did not respond to ${message.type} within ${Math.round(timeoutMs / 1000)}s: ${getErrorMessage(lastError)}`);
+}
+
 // ============================================================
 // Logging
 // ============================================================
@@ -1937,18 +1957,26 @@ async function refreshOAuthIfTimedOutBeforeStep6(state) {
   await addLog('Step 6: Checking CPA Auth status before login...');
 
   try {
-    await reuseOrCreateTab('vps-panel', state.vpsUrl, {
+    const vpsTabId = await reuseOrCreateTab('vps-panel', state.vpsUrl, {
       inject: ['content/utils.js', 'content/vps-panel.js'],
       injectSource: 'vps-panel',
     });
 
-    const response = await sendToContentScript('vps-panel', {
+    const response = await sendToTabWithRetry(vpsTabId, {
       type: 'CHECK_OAUTH_TIMEOUT_STATUS',
       source: 'background',
+    }, {
+      timeoutMs: 10000,
+      intervalMs: 300,
     });
 
     if (response?.error) {
       throw new Error(response.error);
+    }
+
+    if (response?.oauthActive) {
+      await addLog('Step 6: CPA Auth indicates the current OAuth link is still active. Continuing login...', 'ok');
+      return state;
     }
 
     if (!response?.timedOut) {
@@ -2085,10 +2113,9 @@ async function executeStep8(state) {
   // Register webNavigation listener (scoped to this step)
   return new Promise((resolve, reject) => {
     let resolved = false;
-    let resolveCaptureWait = null;
-    const captureWait = new Promise((resolveCapture) => {
-      resolveCaptureWait = resolveCapture;
-    });
+    let signupTabId = null;
+    let urlPollTimer = null;
+    let timeoutId = null;
 
     const cleanupListener = () => {
       if (webNavListener) {
@@ -2097,9 +2124,72 @@ async function executeStep8(state) {
       }
     };
 
-    const timeout = setTimeout(() => {
+    const cleanup = () => {
       cleanupListener();
-      reject(new Error('Localhost redirect not captured after 120s. Step 8 click may have been blocked.'));
+      if (urlPollTimer) {
+        clearInterval(urlPollTimer);
+        urlPollTimer = null;
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+
+    const completeWithLocalCallback = (callbackUrl, source) => {
+      if (resolved || !isLocalCallbackUrl(callbackUrl)) {
+        return;
+      }
+
+      resolved = true;
+      cleanup();
+      console.log(LOG_PREFIX, `Captured localhost redirect via ${source}: ${callbackUrl}`);
+
+      (async () => {
+        try {
+          await setState({ localhostUrl: callbackUrl });
+          await addLog(`Step 8: Captured localhost URL via ${source}: ${callbackUrl}`, 'ok');
+          await setStepStatus(8, 'completed');
+          notifyStepComplete(8, { localhostUrl: callbackUrl });
+          broadcastDataUpdate({ localhostUrl: callbackUrl });
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      })();
+    };
+
+    const checkSignupTabForLocalRedirect = async (source) => {
+      if (!signupTabId || resolved) {
+        return false;
+      }
+
+      try {
+        const tab = await chrome.tabs.get(signupTabId);
+        if (isLocalCallbackUrl(tab.url)) {
+          completeWithLocalCallback(tab.url, source);
+          return true;
+        }
+      } catch (err) {
+        await addLog(`Step 8: Could not inspect auth tab URL during ${source}: ${getErrorMessage(err)}`, 'warn');
+      }
+
+      return false;
+    };
+
+    timeoutId = setTimeout(() => {
+      (async () => {
+        const foundRedirect = await checkSignupTabForLocalRedirect('timeout fallback');
+        if (foundRedirect || resolved) {
+          return;
+        }
+
+        cleanup();
+        reject(new Error('Localhost redirect not captured after 120s. Step 8 click may have been blocked.'));
+      })().catch(err => {
+        cleanup();
+        reject(err);
+      });
     }, 120000);
 
     webNavListener = (details) => {
@@ -2107,24 +2197,7 @@ async function executeStep8(state) {
         return;
       }
 
-      resolved = true;
-      console.log(LOG_PREFIX, `Captured localhost redirect: ${details.url}`);
-      cleanupListener();
-      clearTimeout(timeout);
-      if (resolveCaptureWait) resolveCaptureWait(details.url);
-
-      (async () => {
-        try {
-          await setState({ localhostUrl: details.url });
-          await addLog(`Step 8: Captured localhost URL: ${details.url}`, 'ok');
-          await setStepStatus(8, 'completed');
-          notifyStepComplete(8, { localhostUrl: details.url });
-          broadcastDataUpdate({ localhostUrl: details.url });
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      })();
+      completeWithLocalCallback(details.url, 'webNavigation');
     };
 
     chrome.webNavigation.onBeforeNavigate.addListener(webNavListener);
@@ -2134,7 +2207,7 @@ async function executeStep8(state) {
     // the debugger Input API directly.
     (async () => {
       try {
-        let signupTabId = await getTabId('signup-page');
+        signupTabId = await getTabId('signup-page');
         if (signupTabId) {
           await chrome.tabs.update(signupTabId, { active: true });
           await addLog('Step 8: Switched to auth page. Preparing debugger click...');
@@ -2142,6 +2215,12 @@ async function executeStep8(state) {
           signupTabId = await reuseOrCreateTab('signup-page', state.oauthUrl);
           await addLog('Step 8: Auth tab reopened. Preparing debugger click...');
         }
+
+        urlPollTimer = setInterval(() => {
+          checkSignupTabForLocalRedirect('URL polling').catch(err => {
+            console.warn(LOG_PREFIX, 'Step 8 URL polling failed:', err);
+          });
+        }, 800);
 
         const clickResult = await sendToContentScript('signup-page', {
           type: 'STEP8_FIND_AND_CLICK',
@@ -2158,8 +2237,7 @@ async function executeStep8(state) {
           await addLog('Step 8: Debugger click dispatched, waiting for redirect...');
         }
       } catch (err) {
-        clearTimeout(timeout);
-        cleanupListener();
+        cleanup();
         reject(err);
       }
     })();

@@ -68,14 +68,35 @@ async function handleStep(step, payload) {
   }
 }
 
-function checkOauthTimeoutStatus() {
-  const statusEl = document.querySelector('.status-badge, [class*="status"]');
-  const statusText = (statusEl?.textContent || '').replace(/\s+/g, ' ').trim();
-  const waiting = /等待认证中|waiting for auth|waiting for authentication/i.test(statusText);
-  const timedOut = /timeout waiting for oauth callback/i.test(statusText);
+function findCodexOauthCard() {
+  const cards = document.querySelectorAll('.card');
+  for (const card of cards) {
+    const headerText = (card.querySelector('.card-header')?.textContent || '').replace(/\s+/g, ' ').trim();
+    if (/codex\s*oauth/i.test(headerText)) {
+      return card;
+    }
+  }
+  return null;
+}
 
-  if (waiting) {
-    log(`CPA Auth status indicates authentication is still in progress: ${statusText}`);
+function checkOauthTimeoutStatus() {
+  const card = findCodexOauthCard();
+  const statusEl = card?.querySelector('.status-badge');
+  const statusText = (statusEl?.textContent || '').replace(/\s+/g, ' ').trim();
+  const loginButton = card?.querySelector('.card-header button.btn.btn-primary, .card-header button.btn');
+  const loginButtonDisabled = Boolean(loginButton?.disabled);
+  const waiting = /等待认证中|waiting for auth|waiting for authentication/i.test(statusText);
+  const timedOut = /认证失败|auth(?:entication)? failed/i.test(statusText)
+    && /timeout waiting for oauth callback/i.test(statusText);
+  const authUrl = (card?.querySelector('[class*="authUrlValue"]')?.textContent || '').trim();
+  const hasValidAuthUrl = authUrl.startsWith('http');
+  const oauthActive = hasValidAuthUrl && (waiting || loginButtonDisabled);
+
+  if (oauthActive) {
+    log(
+      `CPA Auth indicates OAuth is still active: status="${statusText || 'unknown'}", loginDisabled=${loginButtonDisabled}`,
+      'ok'
+    );
   } else if (timedOut) {
     log(`CPA Auth status indicates OAuth timeout: ${statusText}`, 'warn');
   } else if (statusText) {
@@ -85,11 +106,44 @@ function checkOauthTimeoutStatus() {
   }
 
   return {
+    oauthActive,
     timedOut,
     waiting,
     statusText,
+    authUrl,
+    loginButtonDisabled,
     url: location.href,
   };
+}
+
+async function waitForFreshOauthUrl(previousUrl = '', timeout = 15000) {
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    throwIfStopped();
+
+    const card = findCodexOauthCard();
+    const authUrl = (card?.querySelector('[class*="authUrlValue"]')?.textContent || '').trim();
+    const valid = authUrl.startsWith('http');
+    const changed = !previousUrl || authUrl !== previousUrl;
+
+    if (valid && changed) {
+      return authUrl;
+    }
+
+    await sleep(200);
+  }
+
+  const latestCard = findCodexOauthCard();
+  const latestUrl = (latestCard?.querySelector('[class*="authUrlValue"]')?.textContent || '').trim();
+  if (latestUrl && latestUrl === previousUrl) {
+    throw new Error('OAuth URL did not refresh after clicking login. The panel is still showing the previous expired link.');
+  }
+
+  throw new Error(
+    'Auth URL did not appear after clicking login. ' +
+    'Check if the CPA Auth panel is logged in and Codex service is running. URL: ' + location.href
+  );
 }
 
 // ============================================================
@@ -102,9 +156,11 @@ async function step1_getOAuthLink() {
   // The page may start at #/login and auto-redirect to #/oauth.
   // Wait for the Codex OAuth card to appear (up to 30s for auto-login + redirect).
   let loginBtn = null;
+  let card = null;
   try {
     // Wait for any card-header containing "Codex" to appear
     const header = await waitForElementByText('.card-header', /codex/i, 30000);
+    card = header.closest('.card');
     loginBtn = header.querySelector('button.btn.btn-primary, button.btn');
     log('Step 1: Found Codex OAuth card');
   } catch {
@@ -118,6 +174,8 @@ async function step1_getOAuthLink() {
     throw new Error('Found Codex OAuth card but no login button inside it. URL: ' + location.href);
   }
 
+  const previousOauthUrl = (card?.querySelector('[class*="authUrlValue"]')?.textContent || '').trim();
+
   // Check if button is disabled (already clicked / loading)
   if (loginBtn.disabled) {
     log('Step 1: Login button is disabled (already loading), waiting for auth URL...');
@@ -127,18 +185,9 @@ async function step1_getOAuthLink() {
     log('Step 1: Clicked login button, waiting for auth URL...');
   }
 
-  // Wait for the auth URL to appear in the specific div
-  let authUrlEl = null;
-  try {
-    authUrlEl = await waitForElement('[class*="authUrlValue"]', 15000);
-  } catch {
-    throw new Error(
-      'Auth URL did not appear after clicking login. ' +
-      'Check if the CPA Auth panel is logged in and Codex service is running. URL: ' + location.href
-    );
-  }
+  // Wait for the auth URL to appear or refresh to a new value.
+  const oauthUrl = await waitForFreshOauthUrl(previousOauthUrl, 15000);
 
-  const oauthUrl = (authUrlEl.textContent || '').trim();
   if (!oauthUrl || !oauthUrl.startsWith('http')) {
     throw new Error(`Invalid OAuth URL found: "${oauthUrl.slice(0, 50)}". Expected URL starting with http.`);
   }
