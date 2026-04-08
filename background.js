@@ -2404,7 +2404,7 @@ async function executeStep9(state) {
   const alive = tabId && await isTabAlive('vps-panel');
 
   if (!alive) {
-    // Create new tab
+    // Create new tab and inject scripts
     const tab = await chrome.tabs.create({ url: state.vpsUrl, active: true });
     tabId = tab.id;
     await new Promise(resolve => {
@@ -2416,16 +2416,14 @@ async function executeStep9(state) {
       };
       chrome.tabs.onUpdated.addListener(listener);
     });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content/utils.js', 'content/vps-panel.js'],
+    });
+    await new Promise(r => setTimeout(r, 1000));
   } else {
     await chrome.tabs.update(tabId, { active: true });
   }
-
-  // Inject scripts directly and wait for them to be ready
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ['content/utils.js', 'content/vps-panel.js'],
-  });
-  await new Promise(r => setTimeout(r, 1000));
 
   // Send command directly — bypass queue/ready mechanism
   await addLog(`Step 9: Filling callback URL...`);
