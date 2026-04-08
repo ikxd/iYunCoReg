@@ -68,8 +68,6 @@ const I18N = {
     titleClearLog: '清空日志',
     labelCpaAuth: 'CPA Auth',
     labelLanguage: '语言',
-    labelAlias: '别名',
-    labelCleanup: '清理',
     labelVerify: '验证',
     labelMailbox: '邮箱名',
     labelEmail: '邮箱',
@@ -156,8 +154,6 @@ const I18N = {
     titleClearLog: 'Clear log',
     labelCpaAuth: 'CPA Auth',
     labelLanguage: 'Language',
-    labelAlias: 'Alias',
-    labelCleanup: 'Cleanup',
     labelVerify: 'Verify',
     labelMailbox: 'Mailbox',
     labelEmail: 'Email',
@@ -431,7 +427,7 @@ async function restoreState() {
 }
 
 function syncPasswordField(state) {
-  inputPassword.value = state.customPassword || state.password || '';
+  inputPassword.value = state.customPassword || state.password || 'Aa1234567890';
 }
 
 function updateMailProviderUI() {
@@ -854,7 +850,7 @@ chrome.runtime.onMessage.addListener((message) => {
         inputEmail.value = message.payload.email;
       }
       if (message.payload.password !== undefined) {
-        inputPassword.value = message.payload.password || '';
+        inputPassword.value = message.payload.password || 'Aa1234567890';
       }
       if (message.payload.oauthUrl) {
         displayOauthUrl.textContent = message.payload.oauthUrl;

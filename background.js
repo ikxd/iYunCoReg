@@ -15,9 +15,11 @@ const STOP_ERROR_MESSAGE = 'Flow stopped by user.';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const PERSISTENT_ALIAS_STATE_KEYS = ['accounts', 'manualAliasUsage', 'preservedAliases'];
+const LEGACY_SESSION_STATE_KEYS = ['autoDeleteUsedIcloudAlias'];
 
 initializeSessionStorageAccess();
 initializePersistentAliasState();
+cleanupLegacySessionState();
 
 // ============================================================
 // State Management (chrome.storage.session)
@@ -35,7 +37,6 @@ const DEFAULT_STATE = {
   autoRunPausedPhase: null,
   language: 'zh-CN',
   oauthUrl: null,
-  autoDeleteUsedIcloudAlias: false,
   email: null,
   password: null,
   accounts: [], // Successfully completed accounts: { email, password, createdAt }
@@ -148,6 +149,14 @@ async function initializePersistentAliasState() {
   }
 }
 
+async function cleanupLegacySessionState() {
+  try {
+    await chrome.storage.session.remove(LEGACY_SESSION_STATE_KEYS);
+  } catch (err) {
+    console.warn(LOG_PREFIX, 'Failed to clean up legacy session state:', err?.message || err);
+  }
+}
+
 function broadcastDataUpdate(payload) {
   chrome.runtime.sendMessage({
     type: 'DATA_UPDATED',
@@ -203,38 +212,6 @@ async function recordCompletedAccount() {
 
   await setState({ accounts, manualAliasUsage });
   broadcastIcloudAliasesChanged({ reason: 'used-updated', email, used: true });
-}
-
-async function maybeAutoDeleteCompletedIcloudAlias() {
-  const state = await getState();
-  if (!state.autoDeleteUsedIcloudAlias) return;
-
-  const email = String(state.email || '').trim();
-  if (!email) return;
-  if (isAliasPreserved(state, email)) {
-    await addLog(`iCloud: Auto-delete skipped for preserved alias ${email}.`, 'info');
-    return;
-  }
-
-  try {
-    const aliases = await listIcloudAliases();
-    const alias = aliases.find(item => String(item?.email || '').trim() === email);
-
-    if (!alias) {
-      await addLog(`iCloud: Auto-delete skipped. ${email} was not found in your Hide My Email alias list.`, 'warn');
-      return;
-    }
-
-    if (!alias.anonymousId) {
-      await addLog(`iCloud: Auto-delete skipped. ${email} is missing anonymousId; refresh aliases and retry manually.`, 'warn');
-      return;
-    }
-
-    await deleteIcloudAlias(alias);
-    await addLog(`iCloud: Auto-deleted used alias ${email} after successful completion.`, 'ok');
-  } catch (err) {
-    await addLog(`iCloud: Auto-delete failed for ${email}: ${getErrorMessage(err)}`, 'warn');
-  }
 }
 
 async function setManualEmailState(email) {
@@ -696,7 +673,6 @@ async function resetState() {
       'tabRegistry',
       'language',
       'vpsUrl',
-      'autoDeleteUsedIcloudAlias',
       'customPassword',
       'mailProvider',
       'inbucketHost',
@@ -719,7 +695,6 @@ async function resetState() {
     tabRegistry: prev.tabRegistry || {},
     language: prev.language || 'zh-CN',
     vpsUrl: prev.vpsUrl || '',
-    autoDeleteUsedIcloudAlias: Boolean(prev.autoDeleteUsedIcloudAlias),
     customPassword: prev.customPassword || '',
     mailProvider: prev.mailProvider || '163',
     inbucketHost: prev.inbucketHost || '',
@@ -1271,7 +1246,6 @@ async function handleMessage(message, sender) {
       const updates = {};
       if (message.payload.language !== undefined) updates.language = message.payload.language;
       if (message.payload.vpsUrl !== undefined) updates.vpsUrl = message.payload.vpsUrl;
-      if (message.payload.autoDeleteUsedIcloudAlias !== undefined) updates.autoDeleteUsedIcloudAlias = Boolean(message.payload.autoDeleteUsedIcloudAlias);
       if (message.payload.customPassword !== undefined) updates.customPassword = message.payload.customPassword;
       if (message.payload.mailProvider !== undefined) updates.mailProvider = message.payload.mailProvider;
       if (message.payload.inbucketHost !== undefined) updates.inbucketHost = message.payload.inbucketHost;
@@ -1358,7 +1332,6 @@ async function handleStepData(step, payload) {
       break;
     case 9:
       await recordCompletedAccount();
-      await maybeAutoDeleteCompletedIcloudAlias();
       break;
   }
 }
